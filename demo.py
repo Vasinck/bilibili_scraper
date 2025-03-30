@@ -3,6 +3,9 @@ import time
 import re
 from playwright.sync_api import sync_playwright
 
+def get_video_url():
+    return input("请输入视频链接：").strip().split('?')[0]
+
 def extract_bilibili_comments_with_replies():
     with sync_playwright() as p:
         # 启动浏览器
@@ -23,7 +26,7 @@ def extract_bilibili_comments_with_replies():
         # 打开目标视频页面，获取视频的oid（视频实际ID）
         print("获取视频oid...")
         page = context.new_page()
-        page.goto("https://www.bilibili.com/video/BV1rBodYCEan/")
+        page.goto(get_video_url())
         
         # 等待页面加载
         page.wait_for_load_state("networkidle")
@@ -54,7 +57,7 @@ def extract_bilibili_comments_with_replies():
         # 使用B站评论API获取评论
         all_comments = []
         page_num = 1
-        max_pages = 20  # 最多获取20页评论
+        max_pages = 200  # 最多获取20页评论
         
         while page_num <= max_pages:
             print(f"获取第 {page_num} 页评论...")
