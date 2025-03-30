@@ -20,8 +20,7 @@ def extract_bilibili_comments_with_replies():
             print("Cookies加载成功")
         except Exception as e:
             print(f"加载Cookies失败: {e}")
-            browser.close()
-            return
+            print("将尝试无Cookie访问")
         
         # 打开目标视频页面，获取视频的oid（视频实际ID）
         print("获取视频oid...")
@@ -57,7 +56,10 @@ def extract_bilibili_comments_with_replies():
         # 使用B站评论API获取评论
         all_comments = []
         page_num = 1
-        max_pages = 200  # 最多获取20页评论
+        max_pages = 200  # 最多获取200页评论
+        empty_page_count = 0  # 连续空页面计数器
+        max_empty_pages = 3  # 允许连续空页面的最大数量
+        total_pages = None  # 总页数，稍后从API响应中获取
         
         while page_num <= max_pages:
             print(f"获取第 {page_num} 页评论...")
@@ -77,16 +79,51 @@ def extract_bilibili_comments_with_replies():
                 try:
                     data = json.loads(json_str)
                     
-                    # 提取评论
-                    if data['code'] == 0 and 'data' in data and 'replies' in data['data']:
-                        replies = data['data']['replies']
+                    # 检查API响应是否正常
+                    if data['code'] == 0 and 'data' in data:
+                        # 获取分页信息
+                        page_info = data['data'].get('page', {})
+                        current_page = page_info.get('num', 0)
+                        page_size = page_info.get('size', 20)
+                        total_count = page_info.get('count', 0)
                         
-                        if replies is None:
-                            print("没有更多评论")
-                            break
+                        # 计算总页数
+                        if total_pages is None:
+                            total_pages = (total_count + page_size - 1) // page_size
+                            print(f"视频总共有 {total_count} 条评论，共 {total_pages} 页")
                             
-                        print(f"获取到 {len(replies)} 条一级评论")
+                            # 如果设置的最大页数超过实际总页数，则调整
+                            if max_pages > total_pages:
+                                max_pages = total_pages
+                                print(f"调整最大爬取页数为实际总页数: {max_pages}")
                         
+                        print(f"当前页: {current_page}/{total_pages}, 总评论数: {total_count}")
+                        
+                        # 获取评论列表
+                        replies = data['data'].get('replies', [])
+                        if replies is None:
+                            replies = []
+                        
+                        print(f"当前页评论数: {len(replies)}")
+                        
+                        # 检查是否是空页面
+                        if len(replies) == 0:
+                            empty_page_count += 1
+                            print(f"连续遇到 {empty_page_count} 个空页面")
+                            
+                            if empty_page_count >= max_empty_pages:
+                                print(f"连续 {max_empty_pages} 页都没有评论，停止爬取")
+                                break
+                                
+                            # 尝试下一页
+                            page_num += 1
+                            time.sleep(1)
+                            continue
+                        else:
+                            # 有评论，重置空页面计数器
+                            empty_page_count = 0
+                        
+                        # 处理每条评论
                         for reply in replies:
                             rpid = reply['rpid']  # 评论ID，用于获取二级评论
                             username = reply['member']['uname']
@@ -104,7 +141,7 @@ def extract_bilibili_comments_with_replies():
                                 "replies": []
                             }
                             
-                            print(f"用户: {username} - 评论: {content}")
+                            print(f"用户: {username} - 评论: {content[:50]}{'...' if len(content) > 50 else ''}")
                             
                             # 如果有回复，获取二级评论
                             if reply_count > 0:
@@ -119,12 +156,12 @@ def extract_bilibili_comments_with_replies():
                             
                             all_comments.append(comment_data)
                         
-                        # 检查是否有下一页
-                        if len(replies) < 20:  # B站每页通常返回20条评论
-                            print("没有更多评论")
+                        # 检查是否已经到达最后一页
+                        if current_page >= total_pages:
+                            print("已到达最后一页")
                             break
                     else:
-                        print("API返回异常")
+                        print(f"API返回异常: {data.get('message', '未知错误')}")
                         break
                 except json.JSONDecodeError:
                     print("JSON解析错误")
@@ -142,6 +179,12 @@ def extract_bilibili_comments_with_replies():
         total_replies = sum(len(comment["replies"]) for comment in all_comments)
         print(f"共提取到 {total_replies} 条二级评论")
         
+        # 验证是否获取了所有预期的评论
+        if total_pages and total_count:
+            expected_count = min(total_count, max_pages * 20)  # 考虑最大页数限制
+            if len(all_comments) < expected_count:
+                print(f"警告: 爬取的评论数量({len(all_comments) + total_replies})少于预期({expected_count})，可能有评论未能获取")
+        
         # 保存评论到文件
         with open('bilibili_comments_with_replies.json', 'w', encoding='utf-8') as f:
             json.dump(all_comments, f, ensure_ascii=False, indent=2)
@@ -149,10 +192,13 @@ def extract_bilibili_comments_with_replies():
         print("评论已保存到 bilibili_comments_with_replies.json")
         browser.close()
 
-def get_comment_replies(context, oid, rpid, max_pages=3):
+def get_comment_replies(context, oid, rpid, max_pages=20):
     """获取指定评论的二级评论"""
     all_replies = []
     page_num = 1
+    empty_page_count = 0
+    max_empty_pages = 3
+    total_pages = None
     
     while page_num <= max_pages:
         # B站二级评论API
@@ -172,13 +218,48 @@ def get_comment_replies(context, oid, rpid, max_pages=3):
             try:
                 data = json.loads(json_str)
                 
-                # 提取二级评论
-                if data['code'] == 0 and 'data' in data and 'replies' in data['data']:
-                    replies = data['data']['replies']
+                # 检查API响应是否正常
+                if data['code'] == 0 and 'data' in data:
+                    # 获取分页信息
+                    page_info = data['data'].get('page', {})
+                    current_page = page_info.get('num', 0)
+                    page_size = page_info.get('size', 20)
+                    total_count = page_info.get('count', 0)
                     
-                    if not replies:
-                        break
+                    # 首次获取时计算总页数
+                    if total_pages is None:
+                        total_pages = (total_count + page_size - 1) // page_size if page_size > 0 else 0
+                        print(f"  该评论总共有 {total_count} 条回复，共 {total_pages} 页")
+                        
+                        # 如果设置的最大页数超过实际总页数，则调整
+                        if max_pages > total_pages:
+                            max_pages = total_pages
                     
+                    # 获取回复列表
+                    replies = data['data'].get('replies', [])
+                    if replies is None:
+                        replies = []
+                    
+                    print(f"  当前页({current_page}/{total_pages}): 获取到 {len(replies)} 条回复")
+                    
+                    # 检查是否是空页面
+                    if len(replies) == 0:
+                        empty_page_count += 1
+                        print(f"  连续遇到 {empty_page_count} 个空页面")
+                        
+                        if empty_page_count >= max_empty_pages:
+                            print(f"  连续 {max_empty_pages} 页都没有回复，停止爬取")
+                            break
+                            
+                        # 尝试下一页
+                        page_num += 1
+                        time.sleep(0.5)
+                        continue
+                    else:
+                        # 有回复，重置空页面计数器
+                        empty_page_count = 0
+                    
+                    # 处理每条回复
                     for reply in replies:
                         username = reply['member']['uname']
                         content = reply['content']['message']
@@ -209,14 +290,18 @@ def get_comment_replies(context, oid, rpid, max_pages=3):
                         # 简短打印日志，避免刷屏
                         print(f"    回复: {username} -> {content[:30]}{'...' if len(content) > 30 else ''}")
                     
-                    # 检查是否有下一页
-                    if len(replies) < 20:
+                    # 检查是否已经到达最后一页
+                    if current_page >= total_pages:
+                        print("  已到达最后一页")
                         break
                 else:
+                    print(f"  二级评论API返回异常: {data.get('message', '未知错误')}")
                     break
             except json.JSONDecodeError:
+                print("  JSON解析错误")
                 break
         else:
+            print("  无法提取JSON数据")
             break
         
         page_num += 1
