@@ -182,7 +182,7 @@ def extract_bilibili_comments_with_replies():
         # 验证是否获取了所有预期的评论
         if total_pages and total_count:
             expected_count = min(total_count, max_pages * 20)  # 考虑最大页数限制
-            if len(all_comments) < expected_count:
+            if len(all_comments) + total_replies < expected_count:
                 print(f"警告: 爬取的评论数量({len(all_comments) + total_replies})少于预期({expected_count})，可能有评论未能获取")
         
         # 保存评论到文件
